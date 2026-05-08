@@ -1,0 +1,5 @@
+flask
+pygnmi
+grpcio
+PyYAML
+flask-cors

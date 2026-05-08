@@ -1,0 +1,27 @@
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: app
+    # network_mode: "host"
+    ports:
+      # - "5000:5000"
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - /etc/hosts:/etc/hosts
+    # develop:
+    #   watch:
+    #     - action: rebuild
+    #       path: app.py
+    # environment:
+    #   - CLAB_TOPO_FILE=/app/topo.clab.yml
+    # volumes:
+    #   - .:/app
+    # environment:
+    #   - FLASK_APP=app.py
+    #   - FLASK_DEBUG=1
+    #   - http_proxy=${http_proxy}
+    #   - https_proxy=${https_proxy}
+    # restart: unless-stopped
