@@ -13,6 +13,13 @@ from secrets import token_hex
 # MOCK_MODE=False
 # Path where we expect the topology file to be mounted
 # CLAB_TOPO_PATH = os.environ.get('CLAB_TOPO_FILE', '/app/topology.yml')
+path_root=os.environ.get('ROOT_PATH', 'certs/ca.pem')
+
+def get_sni(input_string: str):
+    """
+    Splits a string by hyphens ('-') and returns the last resulting segment.
+    """
+    return input_string.split("-")[-1]
 
 def findANYsecEncServices(host, port , username, password):
 # Helper function to find the services running ANYsec service encryption
@@ -23,7 +30,7 @@ def findANYsecEncServices(host, port , username, password):
     possibleServices = ["sdp", "ies", "epipe", "cpipe", "vpls", "vprn"]
     possibleCPlanes = ["bgp-evpn", "bgp-ipvpn"]
     # TODO: SDP, bgp-evpn, bgp-ipvpn, 
-    result = get_gnmi_req(["/configure/service"], host, port, username, password)["data"][0][1]
+    result = get_gnmi_req(["/configure/service"], host, get_sni(host), port, username, password)["data"][0][1]
     for service in possibleServices:
       serviceConfig = result.get(service)
       if serviceConfig == None:
@@ -43,7 +50,7 @@ def findANYsecEncServices(host, port , username, password):
                    "anysec-encryption-group": encGroup})
     return encInstances
 
-def findServices(host, port , username, password):
+def findServices(host, sni, port , username, password):
 # Helper function to find the services running ANYsec service encryption
 # Returns a list with service names, bgp-instances and anysec groups pairings
 
@@ -52,7 +59,7 @@ def findServices(host, port , username, password):
     possibleServices = ["sdp", "ies", "epipe", "cpipe", "vpls", "vprn"]
     possibleCPlanes = ["bgp-evpn", "bgp-ipvpn"]
     # TODO: SDP, bgp-evpn, bgp-ipvpn, 
-    result = get_gnmi_req(["/configure/service"], host, port, username, password)["data"][0][1]
+    result = get_gnmi_req(["/configure/service"], host, sni, port, username, password)["data"][0][1]
     for service in possibleServices:
       serviceConfig = result.get(service)
       if serviceConfig == None:
@@ -107,11 +114,12 @@ class Host:
       self.port = port
       self.username = username
       self.password = password
+      self.sni = get_sni(self.hostname)
 
     def importCAConfig(self, caName):
       gnmi_path = "/configure/macsec/connectivity-association[ca-name=" + caName + "]"
       # WARN: Should I not save all this info ?
-      response, val = get_gnmi_req([gnmi_path], self.addr, self.port, self.username, self.password)
+      response, val = get_gnmi_req([gnmi_path], self.addr, self.sni, self.port, self.username, self.password)
       if val == 200:
         self.CAConfig = response[0][1]
 
@@ -124,14 +132,14 @@ class Host:
       cs = 'gcm-aes-xpn-256'
       gnmi_path = "/configure/macsec/connectivity-association[ca-name=" + ca_name + "]"
       newConfig = {'cipher-suite': cs}
-      jsonify(set_gnmi_req([(gnmi_path, newConfig)], self.addr, self.port, self.username, self.password))
+      jsonify(set_gnmi_req([(gnmi_path, newConfig)], self.addr, self.sni, self.port, self.username, self.password))
 
 
     # NOTE: Should I not give object attributes for stuff instead of doing it all like this?
     def importANYsecConfig(self, group):
       tunnel_path = "/configure/anysec/tunnel-encryption/encryption-group[group-name=" + group + "]"
       service_path = "/configure/anysec/service-encryption/encryption-group[group-name=" + group + "]"
-      self.ANYsecConfig = get_gnmi_req([tunnel_path, service_path], self.addr, self.port, self.username, self.password)[0][0]
+      self.ANYsecConfig = get_gnmi_req([tunnel_path, service_path], self.addr, self.sni, self.port, self.username, self.password)[0][0]
       path, self.ANYsecConfig = self.ANYsecConfig
       if path.__contains__("service-encryption"):
         self.anysecType = "s"
@@ -151,7 +159,7 @@ class Host:
       possibleServices = ["sdp", "ies", "epipe", "cpipe", "vpls", "vprn"]
       possibleCPlanes = ["bgp-evpn", "bgp-ipvpn"]
       # TODO: SDP, bgp-evpn, bgp-ipvpn, 
-      result = get_gnmi_req([gnmiPath], self.addr, self.port, self.username, self.password)[0][0][1]
+      result = get_gnmi_req([gnmiPath], self.addr, self.sni, self.port, self.username, self.password)[0][0][1]
 
       for service in possibleServices:
         serviceConfig = result.get(service)
@@ -202,7 +210,7 @@ class Host:
 
       elif self.anysecType == "t":
         newConf = {"admin-state": "disable"}
-        result = set_gnmi_req([(self.anysecTunnelPath, newConf)], self.addr, self.port, self.username, self.password)
+        result = set_gnmi_req([(self.anysecTunnelPath, newConf)], self.addr, self.sni, self.port, self.username, self.password)
         result = {
           "status": "success",
           "device": host,
@@ -222,7 +230,7 @@ class Host:
 
         # NOTE: I'm repeating myself on the services helper functions
         # I could just call the helper function and see if it matches
-        services = findServices(self.addr, self.port, self.username, self.password)
+        services = findServices(self.addr, self.sni, self.port, self.username, self.password)
         for s in services:
           if s["service-name"] == service and s["cPlane"] == cPlane and s["bgp-instance"] == instance: # should I int() both bgp-instance and instance
             self.encPath = "/configure/service/" + s["serviceType"] + "[service-name=" + service + "]/" + cPlane + "/mpls[bgp-instance=" + str(instance) + "]"
@@ -234,7 +242,7 @@ class Host:
         return None
   
     def enableAnysecEnc(self):
-      return set_gnmi_req([(self.encPath, self.conf)], self.addr, self.port, self.username, self.password)
+      return set_gnmi_req([(self.encPath, self.conf)], self.addr, self.sni, self.port, self.username, self.password)
 
     def getInactivePSK(self):
       # Only Outputs the necessary data
@@ -271,12 +279,12 @@ def get_datafrom_req(request):
   
   return hostlist
 
-def get_gnmi_req(gnmi_path, host, port="57400", username="admin", password="NokiaSros1!", insecure=True):
+def get_gnmi_req(gnmi_path, host, sni, port="57400", username="admin", password="NokiaSros1!", insecure=False):
   try:
     # WARNING: In production, use certificates.
     target = (host, port)
   
-    with gNMIclient(target=target, username=username, password=password, insecure=insecure) as gc:
+    with gNMIclient(target=target, username=username, password=password, insecure=insecure, path_root=path_root, skip_verify=insecure, override=sni) as gc:
       result = gc.get(path=gnmi_path, encoding='json')
       responses = []
       # WARN: if multiple values won't I get "update" and "values" instead of val?
@@ -295,12 +303,12 @@ def get_gnmi_req(gnmi_path, host, port="57400", username="admin", password="Noki
   return responses, 200
 
 
-def set_gnmi_req(value, host, port="57400", username="admin", password="NokiaSros1!", insecure=True):
+def set_gnmi_req(value, host, sni, port="57400", username="admin", password="NokiaSros1!", insecure=False):
     try:
         # WARNING: In production, use certificates.
         target = (host, port)
     
-        with gNMIclient(target=target, username=username, password=password, insecure=insecure) as gc:
+        with gNMIclient(target=target, username=username, password=password, insecure=insecure, path_root=path_root, skip_verify=insecure, override=sni) as gc:
             result = gc.set(update=value)
 
         return result
@@ -323,7 +331,7 @@ def host_CA_discovery():
   # WARN: Only runs the first time
   gnmi_path = "/configure/macsec/connectivity-association[ca-name=*]"
   for host in hostlist:
-    val, result = get_gnmi_req([gnmi_path], host.addr, host.port, host.username, host.password)
+    val, result = get_gnmi_req([gnmi_path], host.addr, host.sni, host.port, host.username, host.password)
 
     if result == 200:
       cas = []
@@ -347,7 +355,7 @@ def host_spec_ca_config(ca_name):
   responses = {}
   # WARN: Only runs the first time
   for host in hostlist:
-    val, result = get_gnmi_req([gnmi_path], host.addr, host.port, host.username, host.password)
+    val, result = get_gnmi_req([gnmi_path], host.addr, host.sni, host.port, host.username, host.password)
 
     if result == 200:
       # WARN: Might need to recheck this with the final example
@@ -371,7 +379,7 @@ def enable_ca(ca_name):
     gnmi_path = "/configure/macsec/connectivity-association[ca-name=" + ca_name + "]"
     newConf = {"admin-state": "enable"}
     
-    return jsonify(set_gnmi_req([(gnmi_path, newConf)], hostlist, port, username, password))
+    return jsonify(set_gnmi_req([(gnmi_path, newConf)], hostlist, hostlist.sni, port, username, password))
 
     # TODO: verifications after the request here
 
@@ -386,7 +394,7 @@ def disable_ca(ca_name):
     gnmi_path = "/configure/macsec/connectivity-association[ca-name=" + ca_name + "]"
     newConf = {"admin-state": "disable"}
 
-    return jsonify(set_gnmi_req([(gnmi_path, newConf)], hostlist, port, username, password))
+    return jsonify(set_gnmi_req([(gnmi_path, newConf)], hostlist, hostlist.sni, port, username, password))
 
     # TODO: verifications after the request here
 
@@ -441,7 +449,7 @@ def rollover_cak(ca_name):
 
     for host, config in keyConfigs:
       newKey = {"cak": secret, "cak-name": cakName, "encryption-type": MKASuite, "psk-id": config['psk-id']}
-      jsonify(set_gnmi_req([(gnmi_path, newKey)], host.addr, host.port, host.username, host.password))
+      jsonify(set_gnmi_req([(gnmi_path, newKey)], host.addr, host.sni, host.port, host.username, host.password))
 
     # TODO: Check if key was rolled over correctly
     
@@ -453,7 +461,7 @@ def rollover_cak(ca_name):
 
     for host, config in keyConfigs:
       activePSK = {"active-psk": config['psk-id']}
-      jsonify(set_gnmi_req([(gnmi_path, activePSK)], host.addr, host.port, host.username, host.password))
+      jsonify(set_gnmi_req([(gnmi_path, activePSK)], host.addr, host.sni, host.port, host.username, host.password))
     
     # WARN: check for lost packets
     for host in hostlist:
@@ -473,7 +481,7 @@ def host_anysec_handling():
   responses = {}
   gnmi_path = "/configure/anysec"
   for host in hostlist:
-    val, result = get_gnmi_req([gnmi_path], host.addr, host.port, host.username, host.password)
+    val, result = get_gnmi_req([gnmi_path], host.addr, host.sni, host.port, host.username, host.password)
 
     if result == 200:
       # WARN: Might need to recheck this with the final example
@@ -499,7 +507,7 @@ def anysec_group_admin_state(group):
 
   responses = {}
   for host in hostlist:
-    val, result = get_gnmi_req([tunnel_path, service_path], host.addr, host.port, host.username, host.password)
+    val, result = get_gnmi_req([tunnel_path, service_path], host.addr, host.sni, host.port, host.username, host.password)
 
     if result == 200:
       if val[0][0].__contains__("service"):
@@ -541,7 +549,7 @@ def host_anysec_instance_handling(group):
 
     service_path = "/configure/anysec/service-encryption/encryption-group[group-name=" + group + "]"
 
-    return jsonify(get_gnmi_req([tunnel_path, service_path], hostlist.addr, hostlist.port, hostlist.username, hostlist.password) )
+    return jsonify(get_gnmi_req([tunnel_path, service_path], hostlist.addr, hostlist.sni, hostlist.port, hostlist.username, hostlist.password) )
 
 # TODO: Enable/Disable tunnel and service encryption per anysec instance
 # TODO: Endpoints for stats for the Landing Page
@@ -610,7 +618,7 @@ def host_service_enum():
 
     gnmi_path = "/configure/service"
 
-    return jsonify(get_gnmi_req([gnmi_path], hostlist, port, username, password))
+    return jsonify(get_gnmi_req([gnmi_path], hostlist, hostlist.sni, port, username, password))
 
 @app.route('/api/service/<service>', methods=['GET'])
 def host_service_handling(service):
@@ -625,7 +633,7 @@ def host_service_handling(service):
     # Then service encryption only supports 2 types of vpn services
     # possibilities [epipe, vll, vprn, ies] what about ipipe and cpipe
 
-    return jsonify(get_gnmi_req([ies_path, epipe_path, vpls_path, vprn_path], hostlist, port, username, password) )
+    return jsonify(get_gnmi_req([ies_path, epipe_path, vpls_path, vprn_path], hostlist, hostlist.sni, port, username, password) )
 
 
 # States and Statistics endpoints
@@ -641,7 +649,7 @@ def host_anysec_state():
  
     responses = {}
     for host in hostlist:
-      val, result = get_gnmi_req([gnmi_path], host.addr, host.port, host.username, host.password)
+      val, result = get_gnmi_req([gnmi_path], host.addr, host.sni, host.port, host.username, host.password)
 
       if result == 200:
         # WARN: Might need to recheck this with the final example
@@ -670,7 +678,7 @@ def host_anysec_instance_state(group):
 
     responses = {}
     for host in hostlist:
-      val, result = get_gnmi_req([tunnel_path, service_path], host.addr, host.port, host.username, host.password)
+      val, result = get_gnmi_req([tunnel_path, service_path], host.addr, host.sni, host.port, host.username, host.password)
 
       if result == 200:
         # WARN: Might need to recheck this with the final example

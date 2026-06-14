@@ -1,0 +1,11 @@
+name: rollover-solution
+topology:
+  nodes:
+    app:
+      kind: linux
+      image: rollover-app
+      ports:
+        - 8080:80
+        - 8443:443
+      binds:
+        - /etc/hosts:/etc/hosts:ro
