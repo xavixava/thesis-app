@@ -6,6 +6,22 @@ import json, os
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from secrets import token_hex
+import asyncio
+# from snmp_tools import update_custom_hex_oid
+from pysnmp.hlapi.v3arch.asyncio import (
+    SnmpEngine, 
+    UsmUserData, 
+    UdpTransportTarget, 
+    ContextData,
+    ObjectType, 
+    ObjectIdentity, 
+    walk_cmd, 
+    set_cmd, 
+    OctetString,
+    usmHMAC384SHA512AuthProtocol, 
+    usmAesCfb256Protocol
+)
+
 
 # TODO: Create a mock mode to test frontend
 # TODO: sanitize values and escape values
@@ -14,6 +30,111 @@ from secrets import token_hex
 # Path where we expect the topology file to be mounted
 # CLAB_TOPO_PATH = os.environ.get('CLAB_TOPO_FILE', '/app/topology.yml')
 path_root=os.environ.get('ROOT_PATH', 'certs/ca.pem')
+
+async def update_custom_hex_oid(target_ip, port, v3_user, auth_key, priv_key, secret_payload, target_str="EF0123456789ABCD"):
+    # OID Prefixes and Strings
+    walk_oid_prefix = '1.3.6.1.4.1.6527.3.1.2.114.2.4.1.6'
+    set_oid_prefix  = '1.3.6.1.4.1.6527.3.1.2.114.2.4.1.5'
+    
+    target_search_string = target_str
+    new_hex_payload      = secret_payload
+
+    # Initialize Engine and Credentials
+    snmp_engine = SnmpEngine()
+    user_data = UsmUserData(
+        userName=v3_user,
+        authKey=auth_key,
+        privKey=priv_key,
+        authProtocol=usmHMAC384SHA512AuthProtocol,
+        privProtocol=usmAesCfb256Protocol
+    )
+
+    # In PySNMP 7, network transports must be explicitly awaited
+    transport_target = await UdpTransportTarget.create((target_ip, port))
+
+    matched_oid_suffix = None
+
+    # ==========================================
+    # STEP 1: Walk the OID natively via walk_cmd
+    # ==========================================
+    walk_iterator = walk_cmd(
+        snmp_engine,
+        user_data,
+        transport_target,
+        ContextData(),
+        ObjectType(ObjectIdentity(walk_oid_prefix)),
+        lexicographicMode=False # Stops walk outside target tree
+    )
+
+    # PySNMP 7 uses 'async for' to yield walk results
+    async for errorIndication, errorStatus, errorIndex, varBinds in walk_iterator:
+        if errorIndication:
+            # print(f"[!] Walk Error: {errorIndication}", flush=True)
+            return
+        elif errorStatus:
+            # print(f"[!] Walk Error: {errorStatus.prettyPrint()} at index {errorIndex}", flush=True)
+            return
+        else:
+            for varBind in varBinds:
+                current_oid = varBind[0]
+                current_value = varBind[1]
+                
+                # Simply extract the string exactly as the CLI shows it
+                val_str = current_value.prettyPrint().upper()
+
+                if target_search_string in val_str:
+                    # print(f"[*] Match found at OID: {current_oid}", flush=True)
+                    
+                    oid_str = str(current_oid)
+                    matched_oid_suffix = oid_str.replace(walk_oid_prefix, "")
+                    break 
+        
+        if matched_oid_suffix:
+            break
+
+    # ==========================================
+    # STEP 2: Construct new OID and perform SET
+    # ==========================================
+    if matched_oid_suffix is not None:
+        new_oid_str = set_oid_prefix + matched_oid_suffix
+        # print(f"[*] Constructed new OID for SET: {new_oid_str}", flush=True)
+
+        snmp_set_value = OctetString(new_hex_payload)
+
+        # PySNMP 7 requires awaiting the set_cmd
+        errorIndication, errorStatus, errorIndex, varBinds = await set_cmd(
+            snmp_engine,
+            user_data,
+            transport_target,
+            ContextData(),
+            ObjectType(ObjectIdentity(new_oid_str), snmp_set_value)
+        )
+
+        if errorIndication:
+            # print(f"[!] SET Error: {errorIndication}")
+            return
+        elif errorStatus:
+            # print(f"[!] SET Error: {errorStatus.prettyPrint()} at index {errorIndex}")
+            return
+        # else:
+        #     for varBind in varBinds:
+
+                # print("Success", flush=True)# print(f"[+] Successfully SET: {varBind[0]} = {varBind[1].prettyPrint()}")
+    else:
+        # print(f"[-] Target string '{target_search_string}' was not found in the walk.")
+        return
+
+async def snmp_rollover(addr, port, username, auth_key, priv_key, secret, ckn):
+  await update_custom_hex_oid(
+    target_ip=addr,
+    port=161,
+    v3_user=username,
+    auth_key=auth_key,
+    priv_key=priv_key,
+    secret_payload=secret,
+    target_str=ckn
+  )
+  return 200 # TODO:
 
 def get_sni(input_string: str):
     """
@@ -448,8 +569,9 @@ def rollover_cak(ca_name):
     gnmi_path = "/configure/macsec/connectivity-association[ca-name=" + ca_name + "]/static-cak/pre-shared-key"
 
     for host, config in keyConfigs:
-      newKey = {"cak": secret, "cak-name": cakName, "encryption-type": MKASuite, "psk-id": config['psk-id']}
-      jsonify(set_gnmi_req([(gnmi_path, newKey)], host.addr, host.sni, host.port, host.username, host.password))
+      # newKey = {"cak": secret, "cak-name": cakName, "encryption-type": MKASuite, "psk-id": config['psk-id']}
+      # jsonify(set_gnmi_req([(gnmi_path, newKey)], host.addr, host.sni, host.port, host.username, host.password))
+      asyncio.run(snmp_rollover(host.addr, host.port, host.username, host.password, host.password, secret, config.get("cak-name")))
 
     # TODO: Check if key was rolled over correctly
     

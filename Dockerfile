@@ -13,7 +13,10 @@ FROM python:3.12-slim-trixie
 
 # Install Nginx and Supervisor
 RUN apt-get update && apt-get install -y \
-    nginx
+    nginx \
+    snmp \
+    libsnmp-dev \
+    build-essential
 
 WORKDIR /backend
 

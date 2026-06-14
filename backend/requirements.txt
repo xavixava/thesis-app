@@ -3,3 +3,7 @@ pygnmi
 grpcio
 PyYAML
 flask-cors
+SNMPv3-Hash-Generator
+pysnmp
+pycryptodomex
+cryptography
